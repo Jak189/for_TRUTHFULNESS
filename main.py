@@ -1,16 +1,17 @@
 import logging
 import os
+import asyncio
 from flask import Flask
 from threading import Thread
 from aiogram import Bot, Dispatcher, types
-from aiogram.utils import executor
+from aiogram.filters import Command
 from googlesearch import search
 
-# መረጃዎችን ከ Environment Variables ላይ መሳብ (ለደህንነት)
+# መረጃዎች
 API_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = os.getenv('ADMIN_ID')
 
-# Flask Setup (Render እንዳይዘጋው ለማድረግ)
+# Flask Setup
 app = Flask('')
 
 @app.route('/')
@@ -18,63 +19,52 @@ def home():
     return "for_TRUTHFULNESS Bot is Running!"
 
 def run_flask():
-    # Render የሚጠቀምበትን Port በራሱ እንዲመርጥ ማድረግ
     port = int(os.environ.get('PORT', 8080))
     app.run(host='0.0.0.0', port=port)
 
-# Bot Logging
+# Bot Setup (Version 3 style)
 logging.basicConfig(level=logging.INFO)
 bot = Bot(token=API_TOKEN)
-dp = Dispatcher(bot)
+dp = Dispatcher()
 
-@dp.message_handler(commands=['start'])
+@dp.message(Command("start"))
 async def send_welcome(message: types.Message):
-    welcome_text = (
-        "እንኳን ወደ for_TRUTHFULNESS በሰላም መጡ! ⚖️\n\n"
-        "የጠረጠሩትን ዜና ወይም መረጃ እዚህ ይጻፉልኝ። "
-        "እኔ ደግሞ ከታመኑ ድረ-ገጾች ላይ ፈልጌ ውጤቱን እነግርዎታለሁ።"
-    )
-    await message.reply(welcome_text)
+    await message.reply("እንኳን ወደ for_TRUTHFULNESS በሰላም መጡ! ⚖️\n\nየጠረጠሩትን ዜና ወይም መረጃ እዚህ ይጻፉልኝ።")
 
-@dp.message_handler()
+@dp.message()
 async def auto_check_info(message: types.Message):
-    query = message.text
-    user_name = message.from_user.full_name
+    if not message.text: return
     
-    status_msg = await message.answer("🔍 መረጃውን እያጣራሁ ነው... እባክዎ ጥቂት ሰከንዶች ይጠብቁ።")
+    query = message.text
+    status_msg = await message.answer("🔍 መረጃውን እያጣራሁ ነው... እባክዎ ይጠብቁ።")
 
-    # ለአንተ (Admin) ሪፖርት መላክ
     if ADMIN_ID:
         try:
-            report = f"🚨 **አዲስ ጥያቄ!**\n👤 **ከ:** {user_name}\n📝 **ጥያቄ:** {query}"
-            await bot.send_message(ADMIN_ID, report)
-        except:
-            pass
+            await bot.send_message(ADMIN_ID, f"🚨 **ጥያቄ!**\n👤 **ከ:** {message.from_user.full_name}\n📝 **ጥያቄ:** {query}")
+        except: pass
 
     try:
-        # ጎግል ላይ መፈለግ
         search_results = []
         for j in search(query + " news", num_results=3):
             search_results.append(j)
 
         if search_results:
-            response_text = "✅ **የፍለጋ ውጤቶች ተገኝተዋል፡**\n\n"
-            for link in search_results:
-                response_text += f"🔗 {link}\n\n"
-            response_text += "⚠️ መረጃው በትክክለኛ የዜና ድረ-ገጾች ላይ መኖሩን በሊንኮቹ ገብተው ያረጋግጡ።"
+            response_text = "✅ **የፍለጋ ውጤቶች ተገኝተዋል፡**\n\n" + "\n".join([f"🔗 {link}" for link in search_results])
         else:
-            response_text = "❌ ይቅርታ፣ ስለዚህ ጉዳይ በታመኑ የዜና ምንጮች ላይ ምንም መረጃ አላገኘሁም። መረጃው ትክክል ላይሆን ስለሚችል ጥንቃቄ ያድርጉ።"
+            response_text = "❌ ስለዚህ ጉዳይ በታመኑ የዜና ምንጮች ላይ ምንም መረጃ አላገኘሁም።"
 
-        await status_msg.edit_text(response_text, disable_web_page_preview=True)
+        await status_msg.edit_text(response_text)
+    except Exception:
+        await status_msg.edit_text("⚠️ ፍለጋውን ማከናወን አልቻልኩም። ቆይተው ይሞክሩ።")
 
-    except Exception as e:
-        await status_msg.edit_text("⚠️ በአሁኑ ሰዓት ፍለጋ ማከናወን አልቻልኩም። እባክዎ ቆይተው ይሞክሩ።")
-        print(f"Error: {e}")
+async def main():
+    # Flask-ን ማስጀመር
+    Thread(target=run_flask).start()
+    # ቦቱን ማስጀመር
+    await dp.start_polling(bot)
 
 if __name__ == '__main__':
-    # Flask-ን በሌላ Thread ማስጀመር
-    t = Thread(target=run_flask)
-    t.start()
-    
-    # ቦቱን ማስጀመር
-    executor.start_polling(dp, skip_updates=True)
+    try:
+        asyncio.run(main())
+    except (KeyboardInterrupt, SystemExit):
+        logging.info("Bot stopped")
