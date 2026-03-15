@@ -16,7 +16,9 @@ translator = Translator()
 
 # --- Database Setup (Neon PostgreSQL) ---
 def get_db_connection():
-    return psycopg2.connect(DATABASE_URL, sslmode='require')
+    # Render ላይ የተቀመጠውን DATABASE_URL በቀጥታ ይጠቀማል
+    # sslmode=require መጨመሩን ያረጋግጣል
+    return psycopg2.connect(DATABASE_URL)
 
 def init_db():
     try:
@@ -38,25 +40,20 @@ def init_db():
 
 init_db()
 
-# --- የዜና ምንጮች (የጠየቅካቸውን በሙሉ ያካተተ) ---
+# --- የዜና ምንጮች ---
 NEWS_FEEDS = [
-    # የሀገር ውስጥ (Ethiopian Sources)
     "https://www.ethiopianreporter.com/feed/",
     "https://waltainfo.com/feed/",
     "https://www.fanabc.com/feed/",
     "https://addisstandard.com/feed/",
     "https://zehabesha.com/feed/",
     "https://www.ena.et/am/feed/",
-    
-    # አለም አቀፍ (International Sources)
     "https://feeds.bbci.co.uk/news/world/rss.xml",
     "https://www.aljazeera.com/xml/rss/all.xml",
     "https://news.yahoo.com/rss/",
     "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
     "http://feeds.foxnews.com/foxnews/latest",
     "https://www.reutersagency.com/feed/",
-    
-    # Google News Search (ለ Tikvah፣ ለ አቤል ብርሃኑ እና ለሌሎችም ፍለጋ)
     "https://news.google.com/rss/search?q=Tikvah+Ethiopia+OR+Abel+Berhanu&hl=am&gl=ET&ceid=ET:am",
     "https://news.google.com/rss/search?q=Ethiopia+News+Agency+OR+Addis+Standard&hl=am&gl=ET&ceid=ET:am"
 ]
@@ -92,7 +89,7 @@ async def fetch_news_loop():
         for url in NEWS_FEEDS:
             try:
                 feed = feedparser.parse(url)
-                for entry in feed.entries[:3]: # በየምንጩ የቅርብ 3ቱን ብቻ
+                for entry in feed.entries[:3]:
                     if entry.link not in sent_news:
                         builder = InlineKeyboardBuilder()
                         builder.row(
@@ -110,45 +107,49 @@ async def fetch_news_loop():
 @dp.callback_query(F.data == "ok_send")
 async def approve_news(callback: types.CallbackQuery):
     msg_text = callback.message.text
-    news_link = msg_text.split("🔗 ሊንክ: ")[1].split("\n")[0].strip()
-    news_title = msg_text.split("📝 ርዕስ: ")[1].split("\n")[0]
-    
-    # Scraping
-    full_text_en = ""
     try:
-        res = requests.get(news_link, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        paragraphs = soup.find_all('p')
-        full_text_en = "\n\n".join([p.get_text() for p in paragraphs if len(p.get_text()) > 60])
-    except:
-        full_text_en = "መረጃውን ማግኘት አልተቻለም።"
-
-    am_title = await translate_text(news_title, 'am')
-    am_body = await translate_text(full_text_en[:3500], 'am')
-
-    # Message Format (BREAKING NEWS demek adregiw)
-    broadcast_msg = (
-        f"📢 **BREAKING NEWS**\n\n"
-        f"🇪🇹 **ርዕስ፦ {am_title}**\n\n"
-        f"📝 **ዝርዝር ዘገባ፦**\n{am_body}\n\n"
-        f"🔗 **ሊንክ (Link):** {news_link}"
-    )
-    
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute("SELECT user_id FROM entities")
-    targets = cur.fetchall()
-    cur.close()
-    conn.close()
-    
-    count = 0
-    for target in targets:
+        news_link = msg_text.split("🔗 ሊንክ: ")[1].split("\n")[0].strip()
+        news_title = msg_text.split("📝 ርዕስ: ")[1].split("\n")[0]
+        
+        # Scraping
+        full_text_en = ""
         try:
-            await bot.send_message(target[0], broadcast_msg)
-            count += 1
-            await asyncio.sleep(0.05)
-        except: pass
-    await callback.message.edit_text(f"✅ ለ {count} አድራሻዎች ተሰራጭቷል!")
+            res = requests.get(news_link, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            paragraphs = soup.find_all('p')
+            full_text_en = "\n\n".join([p.get_text() for p in paragraphs if len(p.get_text()) > 60])
+        except:
+            full_text_en = "መረጃውን ማግኘት አልተቻለም።"
+
+        am_title = await translate_text(news_title, 'am')
+        am_body = await translate_text(full_text_en[:3500], 'am')
+
+        broadcast_msg = (
+            f"📢 **BREAKING NEWS**\n\n"
+            f"🇪🇹 **ርዕስ፦ {am_title}**\n\n"
+            f"📝 **ዝርዝር ዘገባ፦**\n{am_body}\n\n"
+            f"🔗 **ሊንክ (Link):** {news_link}"
+        )
+        
+        # ዳታቤዝ ግንኙነት ፍተሻ
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT user_id FROM entities")
+        targets = cur.fetchall()
+        cur.close()
+        conn.close()
+        
+        count = 0
+        for target in targets:
+            try:
+                await bot.send_message(target[0], broadcast_msg)
+                count += 1
+                await asyncio.sleep(0.05)
+            except: pass
+        await callback.message.edit_text(f"✅ ለ {count} አድራሻዎች ተሰራጭቷል!")
+    except Exception as e:
+        # ስህተት ካለ ለተጠቃሚው እንዲታይ
+        await callback.answer(f"Error: {str(e)}", show_alert=True)
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -159,30 +160,35 @@ async def cmd_start(message: types.Message):
 @dp.message(Command("stat"))
 async def cmd_stat(message: types.Message):
     if message.from_user.id == ADMIN_ID:
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT id, username FROM entities ORDER BY id ASC")
-        rows = cur.fetchall()
-        cur.close()
-        conn.close()
-        
-        report = "📊 **ተጠቃሚዎች ዝርዝር፦**\n"
-        for r in rows:
-            report += f"{r[0]}. @{r[1] if r[1] else 'None'}\n"
-        report += "\n💡 ዝርዝር ዳታ ለማየት ቁጥሩን Reply ያድርጉ።"
-        await message.answer(report)
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT id, username FROM entities ORDER BY id ASC")
+            rows = cur.fetchall()
+            cur.close()
+            conn.close()
+            
+            report = "📊 **ተጠቃሚዎች ዝርዝር፦**\n"
+            for r in rows:
+                report += f"{r[0]}. @{r[1] if r[1] else 'None'}\n"
+            report += "\n💡 ዝርዝር ዳታ ለማየት ቁጥሩን Reply ያድርጉ።"
+            await message.answer(report)
+        except Exception as e:
+            await message.answer(f"Database Error: {e}")
 
 @dp.message(F.reply_to_message & (F.from_user.id == ADMIN_ID))
 async def get_user_detail(message: types.Message):
     if message.text.isdigit():
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT user_id, type, username FROM entities WHERE id = %s", (int(message.text),))
-        user = cur.fetchone()
-        cur.close()
-        conn.close()
-        if user:
-            await message.answer(f"👤 **መረጃ**\n🆔 ID: `{user[0]}`\n📂 Type: {user[1]}\n🏷 User: @{user[2]}")
+        try:
+            conn = get_db_connection()
+            cur = conn.cursor()
+            cur.execute("SELECT user_id, type, username FROM entities WHERE id = %s", (int(message.text),))
+            user = cur.fetchone()
+            cur.close()
+            conn.close()
+            if user:
+                await message.answer(f"👤 **መረጃ**\n🆔 ID: `{user[0]}`\n📂 Type: {user[1]}\n🏷 User: @{user[2]}")
+        except: pass
 
 @dp.message()
 async def auto_reg_and_chat(message: types.Message):
