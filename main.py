@@ -8,22 +8,23 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- Setup ---
 API_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = int(os.getenv('ADMIN_ID')) 
+ADMIN_ID = int(os.getenv('ADMIN_ID'))
 app = Flask('')
 
-# Database Setup
+# Database Setup (User & Group Management)
 db = sqlite3.connect("users.db", check_same_thread=False)
 cursor = db.cursor()
-cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
+cursor.execute("CREATE TABLE IF NOT EXISTS users (id INTEGER PRIMARY KEY, username TEXT, type TEXT)")
 db.commit()
 
-# የዜና ምንጮች
+# የዜና ምንጮች (ሀገር ውስጥና ውጭ)
 NEWS_FEEDS = [
-    "https://www.youtube.com/feeds/videos.xml?channel_id=UC6f_uV6mO_nL_8_IubZkF7w", # Abel Birhanu
     "https://www.fanabc.com/feed/",
     "https://www.ebc.et/feed/",
     "https://feeds.bbci.co.uk/news/world/rss.xml",
-    "https://www.aljazeera.com/xml/rss/all.xml"
+    "https://www.aljazeera.com/xml/rss/all.xml",
+    "https://www.reutersagency.com/feed/",
+    "https://www.youtube.com/feeds/videos.xml?channel_id=UC6f_uV6mO_nL_8_IubZkF7w" # Abel Birhanu
 ]
 
 sent_news = set()
@@ -32,11 +33,16 @@ dp = Dispatcher()
 
 # --- Functions ---
 
-def register_user(user_id):
-    cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
+def register_target(m: types.Message):
+    """ሰዎችንና ግሩፖችን መመዝገቢያ"""
+    t_id = m.chat.id
+    t_type = m.chat.type
+    t_username = m.chat.username or m.chat.title or "Unknown"
+    cursor.execute("INSERT OR IGNORE INTO users (id, username, type) VALUES (?, ?, ?)", (t_id, t_username, t_type))
     db.commit()
 
-async def fetch_news_for_approval():
+async def fetch_news_loop():
+    """በየ 10 ሰከንዱ አዳዲስ ዜናዎችን መፈለጊያ (Point 2 & 3)"""
     while True:
         for url in NEWS_FEEDS:
             try:
@@ -49,96 +55,84 @@ async def fetch_news_for_approval():
                             types.InlineKeyboardButton(text="✅ አጽድቅ (Approve)", callback_data="ok_send"),
                             types.InlineKeyboardButton(text="❌ ይቅር (Ignore)", callback_data="no_skip")
                         )
-                        
-                        admin_msg = (
-                            f"📩 **አዲስ ዜና ለፍቃድ ቀርቧል!**\n\n"
-                            f"📝 ርዕስ: {entry.title}\n"
-                            f"🔗 ሊንክ: {entry.link}\n\n"
-                            f"ይህ ዜና ተተንትኖ በሁለት ቋንቋ ለሁሉም ይላክ?"
-                        )
-                        
+                        admin_msg = f"📩 **አዲስ ዜና ለፍቃድ!**\n\n📝 ርዕስ: {entry.title}\n🔗 ሊንክ: {entry.link}"
                         await bot.send_message(ADMIN_ID, admin_msg, reply_markup=builder.as_markup())
                         sent_news.add(entry.link)
-            except Exception as e:
-                logging.error(f"News fetch error: {e}")
-        await asyncio.sleep(600)
+            except: pass
+        await asyncio.sleep(10) # 10 ሰከንድ (Point 2)
 
-# --- Button Handlers ---
+# --- Handlers ---
 
 @dp.callback_query(F.data == "ok_send")
 async def approve_news(callback: types.CallbackQuery):
-    # መረጃውን ከአድሚን ሜሴጅ መውሰድ
-    original_text = callback.message.text
-    news_title = original_text.split("📝 ርዕስ: ")[1].split("\n")[0]
-    news_link = original_text.split("🔗 ሊንክ: ")[1].split("\n")[0].strip()
-    
-    # 1. ድረ-ገጹን በመክፈት ዝርዝር መረጃ መሳብ (Scraping)
-    detailed_summary_en = ""
-    try:
-        headers = {'User-Agent': 'Mozilla/5.0'}
-        page = requests.get(news_link, headers=headers, timeout=10)
-        soup = BeautifulSoup(page.text, 'html.parser')
-        paragraphs = soup.find_all('p')
-        # የመጀመሪያዎቹን 2-3 አንቀጾች መውሰድ
-        summary_text = "\n\n".join([p.get_text() for p in paragraphs[:2] if len(p.get_text()) > 40])
-        detailed_summary_en = summary_text[:800] 
-    except:
-        detailed_summary_en = "Please follow the link below for the full story."
+    """ዜናውን አቀናጅቶ ለሁሉም ማሰራጫ (Point 1, 4 & 6)"""
+    msg_text = callback.message.text
+    news_link = msg_text.split("🔗 ሊንክ: ")[1].strip()
+    news_title = msg_text.split("📝 ርዕስ: ")[1].split("\n")[0]
 
-    # 2. በሁለቱም ቋንቋ መልእክቱን ማቀናጀት (እንደ ስክሪንሾቱ)
+    # 1. Scraping & Summary (Point 1 & 6)
+    detail_am = ""
+    try:
+        res = requests.get(news_link, timeout=10)
+        soup = BeautifulSoup(res.text, 'html.parser')
+        paragraphs = soup.find_all('p')
+        # የመጀመሪያዎቹን 3 አንቀጾች መውሰድ
+        detail_am = "\n\n".join([p.get_text() for p in paragraphs[:3] if len(p.get_text()) > 40])
+    except:
+        detail_am = "ዝርዝር መረጃውን ከሊንኩ ይመልከቱ።"
+
     broadcast_msg = (
         f"🔔 **ሰበር ዜና / BREAKING NEWS**\n\n"
-        f"📌 **ርዕስ፦** {news_title}\n"
-        f"📌 **TITLE:** {news_title}\n\n"
-        f"📝 **ዝርዝር ማብራሪያ፦**\n"
-        f"ይህ መረጃ ከታማኝ ምንጮች የተገኘ ሲሆን፣ ዋና ዋና ነጥቦቹን ከታች ያገኛሉ።\n\n"
-        f"📝 **DETAILED SUMMARY:**\n"
-        f"{detailed_summary_en}\n\n"
-        f"🔗 **ሙሉውን መረጃ ለማንበብ / READ MORE:**\n"
-        f"{news_link}"
+        f"📌 **ርዕስ፦** {news_title}\n\n"
+        f"📝 **ዝርዝር ማብራሪያ (Detailed Summary)፦**\n{detail_am[:1000]}\n\n"
+        f"🔗 **ሙሉውን ለማንበብ፦** {news_link}"
     )
-    
-    cursor.execute("SELECT user_id FROM users")
-    users = cursor.fetchall()
-    
+
+    # 2. ለሁሉም ማድረስ (Point 4)
+    cursor.execute("SELECT id FROM users")
+    targets = cursor.fetchall()
     count = 0
-    for user in users:
+    for target in targets:
         try:
-            # disable_web_page_preview=False መሆኑ ቪዲዮው ገዝፎ እንዲታይ ያደርገዋል
-            await bot.send_message(user[0], broadcast_msg, disable_web_page_preview=False, parse_mode="Markdown")
+            # ቪዲዮ ካለ በሊንኩ አማካኝነት ቴሌግራም ራሱ ያመጣዋል (disable_web_page_preview=False)
+            await bot.send_message(target[0], broadcast_msg, disable_web_page_preview=False)
             count += 1
             await asyncio.sleep(0.05)
         except: pass
     
-    await callback.message.edit_text(f"✅ ዜናው በሁለቱም ቋንቋ ለ {count} ሰዎች ተሰራጭቷል!")
-    await callback.answer()
-
-@dp.callback_query(F.data == "no_skip")
-async def ignore_news(callback: types.CallbackQuery):
-    await callback.message.edit_text("❌ ዜናው ተሰርዟል።")
-    await callback.answer()
-
-# --- Basic Handlers ---
+    await callback.message.edit_text(f"✅ ለ {count} ተቀባዮች (ሰዎችና ግሩፖች) ተልኳል!")
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
-    register_user(message.from_user.id)
-    welcome_msg = (
-        "እንኳን ወደ for_TRUTHFULNESS በሰላም መጡ! ⚖️\n\n"
-        "እዚህ እውነተኛ ዜናዎችን ከነዝርዝር ማብራሪያቸው ያገኛሉ።"
-    )
-    await message.answer(welcome_msg)
+    register_target(message) # መመዝገቢያ (Point 5)
+    await message.answer("እንኳን ወደ for_TRUTHFULNESS በሰላም መጡ! ⚖️")
 
-# --- Server Keep-Alive ---
+@dp.message(Command("stat"))
+async def cmd_stat(message: types.Message):
+    """የተመዘገቡ አባላትን መረጃ ማሳያ (Point 5)"""
+    if message.from_user.id != ADMIN_ID: return
+    cursor.execute("SELECT username, type FROM users")
+    rows = cursor.fetchall()
+    report = "📊 **የቦቱ አባላት መረጃ፦**\n\n"
+    for r in rows:
+        report += f"🔹 {r[0]} ({r[1]})\n"
+    await message.answer(report)
+
+@dp.message()
+async def auto_register(message: types.Message):
+    """ማንኛውም ሰው ሜሴጅ ሲልክ በራሱ ይመዘግባል (Point 5)"""
+    register_target(message)
+
+# --- Server ---
 @app.route('/')
-def home(): return "Professional Bilingual News Bot is Online!"
+def home(): return "Pro News System Online!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
 
 async def main():
     Thread(target=run_flask).start()
-    asyncio.create_task(fetch_news_for_approval())
+    asyncio.create_task(fetch_news_loop())
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
