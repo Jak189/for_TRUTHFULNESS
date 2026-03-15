@@ -1,12 +1,14 @@
 import logging, os, asyncio, requests, feedparser, sqlite3
 from flask import Flask
 from threading import Thread
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- Setup ---
 API_TOKEN = os.getenv('BOT_TOKEN')
-ADMIN_ID = os.getenv('ADMIN_ID')
+# አስተውል፡ ADMIN_ID ቁጥር መሆን አለበት (ለምሳሌ፡ 12345678)
+ADMIN_ID = int(os.getenv('ADMIN_ID')) 
 app = Flask('')
 
 # Database Setup (ተጠቃሚዎችን በቋሚነት ለመመዝገብ)
@@ -15,13 +17,13 @@ cursor = db.cursor()
 cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
 db.commit()
 
-# የዜና ምንጮች (የአቤል ብርሀኑ ዩቲዩብ፣ ፋና እና ዓለም አቀፍ)
-# ማሳሰቢያ፡ የዩቲዩብ RSS የሚሠራው በChannel ID ነው
+# የዜና ምንጮች (YouTube, TV Channels, International)
 NEWS_FEEDS = [
     "https://www.youtube.com/feeds/videos.xml?channel_id=UC6f_uV6mO_nL_8_IubZkF7w", # Abel Birhanu
     "https://www.fanabc.com/feed/", # Fana BC
-    "https://www.aljazeera.com/xml/rss/all.xml", # Al Jazeera
-    "https://news.google.com/rss?hl=en-US&gl=US&ceid=US:en" # Google News
+    "https://www.ebc.et/feed/", # EBC
+    "https://feeds.bbci.co.uk/news/world/rss.xml", # BBC World
+    "https://www.aljazeera.com/xml/rss/all.xml" # Al Jazeera
 ]
 
 sent_news = set()
@@ -35,98 +37,126 @@ def register_user(user_id):
     cursor.execute("INSERT OR IGNORE INTO users (user_id) VALUES (?)", (user_id,))
     db.commit()
 
-async def fetch_latest_news():
-    """አዳዲስ ዜናዎችን ፈልጎ ለሁሉም ተጠቃሚዎች የሚያሰራጭ"""
+async def fetch_news_for_approval():
+    """አዳዲስ ዜናዎችን ፈልጎ መጀመሪያ ለአድሚን (ለአንተ) ለፍቃድ የሚያቀርብ"""
     while True:
-        logging.info("Checking for new stories...")
+        logging.info("Checking news sources...")
         for url in NEWS_FEEDS:
             try:
                 feed = feedparser.parse(url)
                 if feed.entries:
-                    entry = feed.entries[0] # አዲሱን አንድ ዜና ብቻ
+                    entry = feed.entries[0]
                     if entry.link not in sent_news:
-                        msg = f"🔔 **ሰበር ዜና!**\n\n📝 {entry.title}\n\n🔗 {entry.link}"
+                        # የማጽደቂያ በተኖች (Buttons)
+                        builder = InlineKeyboardBuilder()
+                        builder.row(
+                            types.InlineKeyboardButton(text="✅ አጽድቅ (Approve)", callback_data="send_all"),
+                            types.InlineKeyboardButton(text="❌ ይቅር (Ignore)", callback_data="ignore")
+                        )
                         
-                        # በዳታቤዝ ያሉትን ሁሉንም ተጠቃሚዎች መሳብ
-                        cursor.execute("SELECT user_id FROM users")
-                        all_users = cursor.fetchall()
+                        admin_msg = (
+                            f"📩 **አዲስ ዜና ለፍቃድ ቀርቧል!**\n\n"
+                            f"📝 **ርዕስ:** {entry.title}\n"
+                            f"🔗 **ሊንክ:** {entry.link}\n\n"
+                            f"ይህ ዜና ለሁሉም ተመዝጋቢዎች ይላክ?"
+                        )
                         
-                        success_count = 0
-                        for user in all_users:
-                            try:
-                                await bot.send_message(user[0], msg)
-                                success_count += 1
-                                await asyncio.sleep(0.05) # Spam እንዳይሆን ትንሽ እረፍት
-                            except Exception:
-                                pass # ቦቱን Block ያደረጉ ሰዎችን ያልፋል
-                        
-                        # ለአድሚኑ (ለአንተ) ሪፖርት መላክ
-                        if ADMIN_ID:
-                            report = f"📊 **የዜና ስርጭት ሪፖርት**\n\n✅ ዜናው ለ {success_count} ተጠቃሚዎች ተሰራጭቷል።\n🔗 {entry.link}"
-                            await bot.send_message(ADMIN_ID, report)
-                        
+                        await bot.send_message(ADMIN_ID, admin_msg, reply_markup=builder.as_markup())
                         sent_news.add(entry.link)
             except Exception as e:
-                logging.error(f"News error: {e}")
+                logging.error(f"Error checking {url}: {e}")
         
         await asyncio.sleep(600) # በየ 10 ደቂቃው ይፈትሻል
 
-# --- Handlers ---
+# --- Callbacks (የበተን ትዕዛዞች) ---
+
+@dp.callback_query(F.data == "send_all")
+async def approve_news(callback: types.CallbackQuery):
+    # ከሜሴጁ ላይ ርዕሱንና ሊንኩን መለየት
+    original_text = callback.message.text
+    # እዚህ ጋር ግርድፍ ትርጉም ወይም ማብራሪያ ማከል ይቻላል
+    
+    broadcast_msg = (
+        f"🔔 **ሰበር ዜና / BREAKING NEWS**\n\n"
+        f"📌 {original_text.split('📝 ርዕስ: ')[1].split('🔗 ሊንክ:')[0].strip()}\n\n"
+        f"አዲስ መረጃ ወጥቷል፤ ዝርዝሩን ከታች ባለው ሊንክ ይመልከቱ።\n"
+        f"New information is out; check the link below for details.\n\n"
+        f"🔗 {original_text.split('🔗 ሊንክ: ')[1].split('ይህ ዜና')[0].strip()}"
+    )
+    
+    # ለሁሉም ተጠቃሚዎች መላክ
+    cursor.execute("SELECT user_id FROM users")
+    all_users = cursor.fetchall()
+    
+    success = 0
+    for user in all_users:
+        try:
+            await bot.send_message(user[0], broadcast_msg)
+            success += 1
+            await asyncio.sleep(0.05) # ፍጥነት ለመቀነስ
+        except: pass
+    
+    await callback.message.edit_text(f"✅ ዜናው ለ {success} ተጠቃሚዎች ተሰራጭቷል!")
+    await callback.answer()
+
+@dp.callback_query(F.data == "ignore")
+async def ignore_news(callback: types.CallbackQuery):
+    await callback.message.edit_text("❌ ዜናው ውድቅ ተደርጓል።")
+    await callback.answer()
+
+# --- Message Handlers ---
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     register_user(message.from_user.id)
-    # የቪዲዮ ሊንክ (የራስህን የቪዲዮ ሊንክ እዚህ መተካት ትችላለህ)
-    video_url = "https://raw.githubusercontent.com/aiogram/aiogram/dev/docs/static/img/logo.png" # ለጊዜው በምስል ተተክቷል
-    caption = (
-        "እንኳን ወደ for_TRUTHFULNESS በሰላም መጡ! ⚖️\n\n"
-        "እኔ አዳዲስ ዜናዎችን ከሀገር ውስጥ (አቤል ብርሀኑ፣ ፋና) እና ከዓለም ዙሪያ "
-        "ወዲያውኑ አደርስዎታለሁ። እንዲሁም የሚፈልጉትን መረጃ እዚህ መጻፍ ይችላሉ።"
+    
+    # ቪዲዮ በ caption ለመላክ (ቪዲዮው ቴሌግራም ላይ ካለ ሊንኩን ወይም File ID ይጠቀሙ)
+    welcome_text = (
+        "እንኳን ወደ for_TRUTHFULNESS በሰላም መጡ! ⚖️\n"
+        "Welcome to for_TRUTHFULNESS!\n\n"
+        "እዚህ እውነተኛ እና የተጣሩ ዜናዎችን ያገኛሉ።\n"
+        "You will get verified and real news here."
     )
     
+    # ማሳሰቢያ፡ ቪዲዮ ለመላክ .mp4 ሊንክ ያስፈልጋል
+    video_url = "https://www.sample-videos.com/video123/mp4/720/big_buck_bunny_720p_1mb.mp4" 
+    
     try:
-        # ቪዲዮው የማይሰራ ከሆነ በጽሁፍ ብቻ ይልካል
-        await message.answer_photo(photo=video_url, caption=caption)
+        await message.answer_video(video=video_url, caption=welcome_text)
     except:
-        await message.answer(caption)
+        await message.answer(welcome_text)
 
 @dp.message()
-async def handle_all(message: types.Message):
-    """ማንኛውም ጥያቄ ሲመጣ ተጠቃሚውን መዝግቦ ፍለጋ ያደርጋል"""
+async def handle_search(message: types.Message):
     register_user(message.from_user.id)
-    
+    # የፍለጋ ተግባር (እንደ ቀድሞው)
     query = message.text
     if not query: return
     
-    status_msg = await message.answer("🔍 መረጃውን እያጣራሁ ነው...")
-    
+    status = await message.answer("🔍 መረጃውን እያጣራሁ ነው...")
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
-        search_url = f"https://www.google.com/search?q={query}+news&num=5"
-        response = requests.get(search_url, headers=headers, timeout=10)
-        soup = BeautifulSoup(response.text, 'html.parser')
+        search_url = f"https://www.google.com/search?q={query}+news"
+        res = requests.get(search_url, headers=headers)
+        soup = BeautifulSoup(res.text, 'html.parser')
         
         links = []
         for a in soup.find_all('a', href=True):
-            link = a['href']
-            if link.startswith('/url?q='):
-                clean_link = link.split('/url?q=')[1].split('&')[0]
-                if "google.com" not in clean_link:
-                    links.append(clean_link)
+            if a['href'].startswith('/url?q='):
+                link = a['href'].split('/url?q=')[1].split('&')[0]
+                if "google.com" not in link: links.append(link)
             if len(links) == 3: break
-
+        
         if links:
-            response_text = "✅ **የተገኘ መረጃ፦**\n\n" + "\n\n".join([f"🔗 {l}" for l in links])
+            await status.edit_text("✅ **የተገኘ መረጃ፦**\n\n" + "\n\n".join(links))
         else:
-            response_text = f"❌ ዝርዝር መረጃ አላገኘሁም። እዚህ ይሞክሩ፦\n🔗 https://www.google.com/search?q={query.replace(' ', '+')}"
-
-        await status_msg.edit_text(response_text, disable_web_page_preview=True)
+            await status.edit_text(f"❌ አልተገኘም፤ እዚህ ይሞክሩ፡ https://www.google.com/search?q={query}")
     except:
-        await status_msg.edit_text("⚠️ ችግር አጋጥሟል። ቆይተው ይሞክሩ።")
+        await status.edit_text("⚠️ ችግር አጋጥሟል።")
 
 # --- Server Keep-Alive ---
 @app.route('/')
-def home(): return "Bot with SQLite and News Broadcast is Online!"
+def home(): return "News Approval System is Live!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
@@ -134,7 +164,7 @@ def run_flask():
 async def main():
     Thread(target=run_flask).start()
     # የዜና መከታተያውን ማስጀመር
-    asyncio.create_task(fetch_latest_news())
+    asyncio.create_task(fetch_news_for_approval())
     # ቦቱን ማስጀመር
     await dp.start_polling(bot)
 
