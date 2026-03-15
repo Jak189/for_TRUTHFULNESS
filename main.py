@@ -10,21 +10,23 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 # --- Setup ---
 API_TOKEN = os.getenv('BOT_TOKEN')
 ADMIN_ID = int(os.getenv('ADMIN_ID'))
-DATABASE_URL = os.getenv('DATABASE_URL') # Neon Connection String እዚህ ይገባል
+DATABASE_URL = os.getenv('DATABASE_URL')
 app = Flask('')
 translator = Translator()
 
 # --- Database Setup (Neon PostgreSQL) ---
 def get_db_connection():
-    return psycopg2.connect(DATABASE_URL)
+    # SSL mode ለ Neon ዳታቤዝ የግድ ያስፈልጋል
+    return psycopg2.connect(DATABASE_URL, sslmode='require')
 
 def init_db():
     conn = get_db_connection()
     cur = conn.cursor()
-    # ተጠቃሚዎችን እና ግሩፖችን ለመመዝገብ
+    # id ለዝርዝር መለያ (SERIAL)፣ user_id ለቴሌግራም መለያ
     cur.execute("""
         CREATE TABLE IF NOT EXISTS entities (
-            id BIGINT PRIMARY KEY, 
+            id SERIAL PRIMARY KEY,
+            user_id BIGINT UNIQUE, 
             type TEXT, 
             username TEXT
         )
@@ -51,25 +53,28 @@ dp = Dispatcher()
 
 # --- Helpers ---
 
-async def translate_to_amharic(text):
-    """እንግሊዝኛውን ወደ አማርኛ ሙሉ በሙሉ የሚተረጉም"""
+async def translate_text(text, target='am'):
+    """ጽሁፍን ወደ ተፈለገው ቋንቋ የሚተረጉም"""
     try:
-        translated = await asyncio.to_thread(translator.translate, text, dest='am')
+        translated = await asyncio.to_thread(translator.translate, text, dest=target)
         return translated.text
     except:
         return text
 
-def register_entity(entity_id, entity_type, username=None):
-    """ሰዎችንና ግሩፖችን በቋሚነት የሚመዘግብ"""
-    conn = get_db_connection()
-    cur = conn.cursor()
-    cur.execute(
-        "INSERT INTO entities (id, type, username) VALUES (%s, %s, %s) ON CONFLICT (id) DO NOTHING",
-        (entity_id, entity_type, username)
-    )
-    conn.commit()
-    cur.close()
-    conn.close()
+def register_entity(user_id, e_type, username=None):
+    """ተጠቃሚዎችን በቋሚነት የሚመዘግብ"""
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute(
+            "INSERT INTO entities (user_id, type, username) VALUES (%s, %s, %s) ON CONFLICT (user_id) DO UPDATE SET username = %s",
+            (user_id, e_type, username, username)
+        )
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logging.error(f"DB Error: {e}")
 
 async def fetch_news_loop():
     """በየ 10 ሰከንዱ አዳዲስ ዜናዎችን የሚፈትሽ"""
@@ -109,21 +114,21 @@ async def approve_news(callback: types.CallbackQuery):
     except:
         full_text_en = "ዝርዝር መረጃ ማግኘት አልተቻለም።"
 
-    # 2. Translation: ሙሉውን ጽሁፍ ወደ አማርኛ መተርጎም
-    am_title = await translate_to_amharic(news_title)
-    am_body = await translate_to_amharic(full_text_en[:3500]) 
+    # 2. Translation: መተርጎም
+    am_title = await translate_text(news_title, 'am')
+    am_body = await translate_text(full_text_en[:3500], 'am')
 
-    # 3. Message: በአማርኛ በዝርዝር የተቀናጀ መልእክት
+    # 3. Message Format (fideluan atfiat ena BREAKING NEWS demek adregiw)
     broadcast_msg = (
-        f"🔔 **ሰበር ዜና / BREAKING NEWS**\n\n"
+        f"📢 **BREAKING NEWS**\n\n"
         f"🇪🇹 **ርዕስ፦ {am_title}**\n\n"
-        f"📝 **ዝርዝር ዘገባ (Detailed Summary)፦**\n{am_body}\n\n"
+        f"📝 **ዝርዝር ዘገባ፦**\n{am_body}\n\n"
         f"🔗 **ሊንክ (Link):** {news_link}"
     )
     
     conn = get_db_connection()
     cur = conn.cursor()
-    cur.execute("SELECT id FROM entities")
+    cur.execute("SELECT user_id FROM entities")
     targets = cur.fetchall()
     cur.close()
     conn.close()
@@ -131,13 +136,12 @@ async def approve_news(callback: types.CallbackQuery):
     count = 0
     for target in targets:
         try:
-            # ለሰዎችና ለግሩፖች ይላካል
             await bot.send_message(target[0], broadcast_msg, disable_web_page_preview=False)
             count += 1
             await asyncio.sleep(0.05)
         except: pass
     
-    await callback.message.edit_text(f"✅ ለ {count} አድራሻዎች (ሰዎችና ግሩፖች) ተሰራጭቷል!")
+    await callback.message.edit_text(f"✅ ለ {count} አድራሻዎች ተሰራጭቷል!")
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
@@ -147,24 +151,53 @@ async def cmd_start(message: types.Message):
 
 @dp.message(Command("stat"))
 async def cmd_stat(message: types.Message):
-    """የተመዘገቡ ሰዎችንና ግሩፖችን ብዛት ለአድሚን ያሳያል"""
+    """የተመዘገቡ ሰዎችን ዝርዝር በቁጥር ለአድሚን ያሳያል"""
     if message.from_user.id == ADMIN_ID:
         conn = get_db_connection()
         cur = conn.cursor()
-        cur.execute("SELECT type, COUNT(*) FROM entities GROUP BY type")
-        stats = cur.fetchall()
+        cur.execute("SELECT id, username FROM entities ORDER BY id ASC LIMIT 50")
+        rows = cur.fetchall()
         cur.close()
         conn.close()
-        report = "📊 **የቦቱ ስታቲስቲክስ፦**\n"
-        for s in stats:
-            report += f"🔹 {s[0].capitalize()}: {s[1]}\n"
+        
+        report = "📊 **የተመዘገቡ ተጠቃሚዎች ዝርዝር፦**\n"
+        for r in rows:
+            user_name = f"@{r[1]}" if r[1] else "No Username"
+            report += f"{r[0]}. {user_name}\n"
+        report += "\n💡 ዝርዝር መረጃ ለማየት ለዚህ መልእክት በቁጥር (Reply) ይስጡ።"
         await message.answer(report)
 
+@dp.message(F.reply_to_message & (F.from_user.id == ADMIN_ID))
+async def get_user_detail(message: types.Message):
+    """በቁጥር Reply ሲደረግ የተጠቃሚውን ሙሉ ዳታ ያወጣል"""
+    if message.text.isdigit():
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT user_id, type, username FROM entities WHERE id = %s", (int(message.text),))
+        user = cur.fetchone()
+        cur.close()
+        conn.close()
+        
+        if user:
+            detail = (
+                f"👤 **የተጠቃሚ መረጃ (Detail)**\n\n"
+                f"🆔 **Telegram ID:** `{user[0]}`\n"
+                f"📂 **Chat Type:** {user[1]}\n"
+                f"🏷 **Username:** @{user[2] if user[2] else 'None'}"
+            )
+            await message.answer(detail)
+
 @dp.message()
-async def auto_reg(message: types.Message):
-    """ማንኛውም መልእክት ሲላክ አዲስ ከሆነ ይመዘግባል"""
+async def auto_reg_and_ai_chat(message: types.Message):
+    """አዲስ ተጠቃሚ ይመዘግባል፣ ለጥያቄም በሁለት ቋንቋ ይመልሳል"""
     e_type = "private" if message.chat.type == "private" else "group"
     register_entity(message.chat.id, e_type, message.chat.username or message.chat.title)
+    
+    # ቦቱ ጥያቄ ሲጠየቅ የሚመልስበት (AI Chat)
+    if not message.text.startswith('/') and message.from_user.id != ADMIN_ID:
+        am_msg = await translate_text(message.text, 'am')
+        en_msg = await translate_text(message.text, 'en')
+        await message.reply(f"🇪🇹 {am_msg}\n\n🇬🇧 {en_msg}")
 
 # --- Server ---
 @app.route('/')
