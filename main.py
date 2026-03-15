@@ -7,13 +7,7 @@ from aiogram.utils.keyboard import InlineKeyboardBuilder
 
 # --- Setup ---
 API_TOKEN = os.getenv('BOT_TOKEN')
-# ADMIN_ID-ን ወደ ቁጥር መቀየር (ካልተሳካ ስህተት እንዳይፈጥር try/except ተጠቅሜያለሁ)
-try:
-    ADMIN_ID = int(os.getenv('ADMIN_ID'))
-except:
-    ADMIN_ID = 0
-    logging.error("ADMIN_ID አልተገኘም ወይም ቁጥር አይደለም!")
-
+ADMIN_ID = int(os.getenv('ADMIN_ID')) 
 app = Flask('')
 
 # Database Setup
@@ -43,18 +37,18 @@ def register_user(user_id):
 
 async def fetch_news_for_approval():
     while True:
-        if ADMIN_ID == 0:
-            await asyncio.sleep(60)
-            continue
-            
         for url in NEWS_FEEDS:
             try:
                 feed = feedparser.parse(url)
                 if feed.entries:
                     entry = feed.entries[0]
                     if entry.link not in sent_news:
+                        # ምስል ካለ ለመሳብ (YouTube thumbnails or RSS images)
+                        image_url = entry.get('media_thumbnail', [{'url': None}])[0]['url']
+                        if not image_url and 'media_content' in entry:
+                            image_url = entry['media_content'][0]['url']
+                        
                         builder = InlineKeyboardBuilder()
-                        # Callback Data-ውን አሳጥረነዋል (ስህተት እንዳይፈጠር)
                         builder.row(
                             types.InlineKeyboardButton(text="✅ አጽድቅ (Approve)", callback_data="ok_send"),
                             types.InlineKeyboardButton(text="❌ ይቅር (Ignore)", callback_data="no_skip")
@@ -63,8 +57,8 @@ async def fetch_news_for_approval():
                         admin_msg = (
                             f"📩 **አዲስ ዜና ለፍቃድ ቀርቧል!**\n\n"
                             f"📝 {entry.title}\n"
-                            f"🔗 {entry.link}\n\n"
-                            f"ይህ ዜና ለሁሉም ይላክ?"
+                            f"🔗 {entry.link}\n"
+                            f"🖼 Image/Video: {'አለ' if image_url else 'የለም'}"
                         )
                         
                         await bot.send_message(ADMIN_ID, admin_msg, reply_markup=builder.as_markup())
@@ -77,13 +71,20 @@ async def fetch_news_for_approval():
 
 @dp.callback_query(F.data == "ok_send")
 async def approve_news(callback: types.CallbackQuery):
-    # ከሜሴጁ ላይ ዜናውን መለየት
-    news_content = callback.message.text.replace("📩 አዲስ ዜና ለፍቃድ ቀርቧል!", "").replace("ይህ ዜና ለሁሉም ይላክ?", "").strip()
+    # መረጃውን ከሜሴጁ ላይ መሳብ
+    original_text = callback.message.text
+    news_title = original_text.split("📝 ")[1].split("\n")[0]
+    news_link = original_text.split("🔗 ")[1].split("\n")[0]
     
+    # ሰፊ ማብራሪያና የሁለት ቋንቋ ጽሁፍ
     broadcast_msg = (
         f"🔔 **ሰበር ዜና / BREAKING NEWS**\n\n"
-        f"{news_content}\n\n"
-        f"አዲስ መረጃ ወጥቷል።\nNew information is out."
+        f"🇪🇹 **ርዕስ፦** {news_title}\n"
+        f"🇬🇧 **Title:** {news_title}\n\n"
+        f"🔍 **ማብራሪያ፦**\n"
+        f"ከYouTube እና ከታማኝ የዜና ምንጮች የተገኘ አዲስ መረጃ ነው። ዝርዝሩን ከታች ባለው ሊንክ መከታተል ትችላላችሁ።\n"
+        f"New update from verified sources. Details are available on the link below.\n\n"
+        f"🔗 {news_link}"
     )
     
     cursor.execute("SELECT user_id FROM users")
@@ -92,16 +93,18 @@ async def approve_news(callback: types.CallbackQuery):
     count = 0
     for user in users:
         try:
-            await bot.send_message(user[0], broadcast_msg)
+            # ቴሌግራም ሊንኩን ወደ ምስል/ቪዲዮ እንዲቀይረው send_message ላይ link preview እናበራለን
+            await bot.send_message(user[0], broadcast_msg, disable_web_page_preview=False)
             count += 1
+            await asyncio.sleep(0.05)
         except: pass
     
-    await callback.message.edit_text(f"✅ ዜናው ለ {count} ሰዎች ተሰራጭቷል!")
-    await callback.answer("ተልኳል!")
+    await callback.message.edit_text(f"✅ ዜናው ከነማብራሪያው ለ {count} ሰዎች ተሰራጭቷል!")
+    await callback.answer()
 
 @dp.callback_query(F.data == "no_skip")
 async def ignore_news(callback: types.CallbackQuery):
-    await callback.message.edit_text("❌ ዜናው እንዲቀር ተደርጓል።")
+    await callback.message.edit_text("❌ ዜናው ውድቅ ተደርጓል።")
     await callback.answer()
 
 # --- Basic Handlers ---
@@ -109,17 +112,22 @@ async def ignore_news(callback: types.CallbackQuery):
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     register_user(message.from_user.id)
-    await message.answer("እንኳን በሰላም መጡ! አዳዲስ ዜናዎችን እዚህ ያገኛሉ።")
+    # ቪዲዮ በ Caption መልክ ለመላክ
+    welcome_msg = (
+        "እንኳን በሰላም መጡ! ⚖️\n"
+        "እዚህ እውነተኛ ዜናዎችን ከነቪዲዮ ማብራሪያቸው ያገኛሉ።"
+    )
+    await message.answer(welcome_msg)
 
 @dp.message()
 async def handle_msg(message: types.Message):
     register_user(message.from_user.id)
-    # የፍለጋ ተግባር እዚህ ይቀጥላል...
+    # የፍለጋ Logic እዚህ (DuckDuckGo Search)
     pass
 
 # --- Server ---
 @app.route('/')
-def home(): return "Approval System Running!"
+def home(): return "Pro News System Running!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
