@@ -17,7 +17,7 @@ cursor = db.cursor()
 cursor.execute("CREATE TABLE IF NOT EXISTS users (user_id INTEGER PRIMARY KEY)")
 db.commit()
 
-# የዜና ምንጮች (YouTube, TV Channels, International)
+# የዜና ምንጮች
 NEWS_FEEDS = [
     "https://www.youtube.com/feeds/videos.xml?channel_id=UC6f_uV6mO_nL_8_IubZkF7w", # Abel Birhanu
     "https://www.fanabc.com/feed/",
@@ -37,7 +37,6 @@ def register_user(user_id):
     db.commit()
 
 async def fetch_news_for_approval():
-    """አዳዲስ ዜናዎችን ፈልጎ ለአድሚን ለፍቃድ የሚያቀርብ"""
     while True:
         for url in NEWS_FEEDS:
             try:
@@ -55,7 +54,7 @@ async def fetch_news_for_approval():
                             f"📩 **አዲስ ዜና ለፍቃድ ቀርቧል!**\n\n"
                             f"📝 ርዕስ: {entry.title}\n"
                             f"🔗 ሊንክ: {entry.link}\n\n"
-                            f"ይህ ዜና ተተንትኖ ለሁሉም ይላክ?"
+                            f"ይህ ዜና ተተንትኖ በሁለት ቋንቋ ለሁሉም ይላክ?"
                         )
                         
                         await bot.send_message(ADMIN_ID, admin_msg, reply_markup=builder.as_markup())
@@ -68,32 +67,35 @@ async def fetch_news_for_approval():
 
 @dp.callback_query(F.data == "ok_send")
 async def approve_news(callback: types.CallbackQuery):
-    # መረጃውን ከሜሴጁ ላይ መሳብ
+    # መረጃውን ከአድሚን ሜሴጅ መውሰድ
     original_text = callback.message.text
     news_title = original_text.split("📝 ርዕስ: ")[1].split("\n")[0]
     news_link = original_text.split("🔗 ሊንክ: ")[1].split("\n")[0].strip()
     
-    # 1. ከዌብሳይቱ ላይ ዝርዝር መረጃውን ለመሳብ (Scraping)
-    detailed_summary = ""
+    # 1. ድረ-ገጹን በመክፈት ዝርዝር መረጃ መሳብ (Scraping)
+    detailed_summary_en = ""
     try:
         headers = {'User-Agent': 'Mozilla/5.0'}
         page = requests.get(news_link, headers=headers, timeout=10)
         soup = BeautifulSoup(page.text, 'html.parser')
-        
-        # ዋናውን ጽሁፍ (Paragraphs) መፈለግ
         paragraphs = soup.find_all('p')
-        # የመጀመሪያዎቹን 3 አንቀጾች ለዝርዝር ማብራሪያ መውሰድ
-        summary_text = "\n\n".join([p.get_text() for p in paragraphs[:3] if len(p.get_text()) > 20])
-        detailed_summary = summary_text[:900] # ቴሌግራም ላይ እንዳይቆረጥ መቆጣጠር
+        # የመጀመሪያዎቹን 2-3 አንቀጾች መውሰድ
+        summary_text = "\n\n".join([p.get_text() for p in paragraphs[:2] if len(p.get_text()) > 40])
+        detailed_summary_en = summary_text[:800] 
     except:
-        detailed_summary = "ዝርዝር መረጃውን ከታች ያለውን ሊንክ በመጫን መከታተል ትችላላችሁ።"
+        detailed_summary_en = "Please follow the link below for the full story."
 
-    # 2. ለተጠቃሚዎች የሚላከው መልእክት አቀራረብ
+    # 2. በሁለቱም ቋንቋ መልእክቱን ማቀናጀት (እንደ ስክሪንሾቱ)
     broadcast_msg = (
         f"🔔 **ሰበር ዜና / BREAKING NEWS**\n\n"
-        f"📌 **ርዕስ፦** {news_title}\n\n"
-        f"📝 **ዝርዝር ማብራሪያ፦**\n{detailed_summary}\n\n"
-        f"🔗 **ሙሉውን መረጃ ለማንበብ፦** {news_link}"
+        f"📌 **ርዕስ፦** {news_title}\n"
+        f"📌 **TITLE:** {news_title}\n\n"
+        f"📝 **ዝርዝር ማብራሪያ፦**\n"
+        f"ይህ መረጃ ከታማኝ ምንጮች የተገኘ ሲሆን፣ ዋና ዋና ነጥቦቹን ከታች ያገኛሉ።\n\n"
+        f"📝 **DETAILED SUMMARY:**\n"
+        f"{detailed_summary_en}\n\n"
+        f"🔗 **ሙሉውን መረጃ ለማንበብ / READ MORE:**\n"
+        f"{news_link}"
     )
     
     cursor.execute("SELECT user_id FROM users")
@@ -102,18 +104,18 @@ async def approve_news(callback: types.CallbackQuery):
     count = 0
     for user in users:
         try:
-            # ዜናውን ከነ ምስል ቅድመ-ዕይታው (Preview) መላክ
-            await bot.send_message(user[0], broadcast_msg, disable_web_page_preview=False)
+            # disable_web_page_preview=False መሆኑ ቪዲዮው ገዝፎ እንዲታይ ያደርገዋል
+            await bot.send_message(user[0], broadcast_msg, disable_web_page_preview=False, parse_mode="Markdown")
             count += 1
             await asyncio.sleep(0.05)
         except: pass
     
-    await callback.message.edit_text(f"✅ ዜናው በዝርዝር ተጽፎ ለ {count} ሰዎች ተሰራጭቷል!")
+    await callback.message.edit_text(f"✅ ዜናው በሁለቱም ቋንቋ ለ {count} ሰዎች ተሰራጭቷል!")
     await callback.answer()
 
 @dp.callback_query(F.data == "no_skip")
 async def ignore_news(callback: types.CallbackQuery):
-    await callback.message.edit_text("❌ ዜናው እንዲቀር ተደርጓል።")
+    await callback.message.edit_text("❌ ዜናው ተሰርዟል።")
     await callback.answer()
 
 # --- Basic Handlers ---
@@ -129,7 +131,7 @@ async def cmd_start(message: types.Message):
 
 # --- Server Keep-Alive ---
 @app.route('/')
-def home(): return "Professional News Scraper System is Online!"
+def home(): return "Professional Bilingual News Bot is Online!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
