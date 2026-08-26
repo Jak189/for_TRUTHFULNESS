@@ -1,0 +1,8 @@
+aiogram
+requests
+feedparser
+psycopg2-binary
+beautifulsoup4
+googletrans==3.1.0a0
+flask
+google-generativeai
