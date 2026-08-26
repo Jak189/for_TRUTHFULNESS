@@ -1,6 +1,5 @@
 import logging, os, asyncio, requests, feedparser, psycopg2
 from bs4 import BeautifulSoup
-from googletrans import Translator
 from flask import Flask
 from threading import Thread
 from aiogram import Bot, Dispatcher, types, F
@@ -15,7 +14,6 @@ DATABASE_URL = os.getenv('DATABASE_URL')
 GEMINI_API_KEY = os.getenv('GEMINI_API_KEY')
 
 app = Flask('')
-translator = Translator()
 
 # --- Gemini AI Setup ---
 if GEMINI_API_KEY:
@@ -75,11 +73,16 @@ dp = Dispatcher()
 
 # --- Helpers ---
 
-async def translate_text(text, target='am'):
+async def ai_translate(text, target_lang="Amharic"):
+    """Gemini ን በመጠቀም ዜናዎችን ወደ አማርኛ መተርጎም"""
+    if not ai_model or not text.strip():
+        return text
     try:
-        translated = await asyncio.to_thread(translator.translate, text, dest=target)
-        return translated.text
-    except:
+        prompt = f"Translate the following news text into clear, natural {target_lang}. Return ONLY the translation:\n\n{text}"
+        res = await asyncio.to_thread(ai_model.generate_content, prompt)
+        return res.text.strip()
+    except Exception as e:
+        logging.error(f"Translation Error: {e}")
         return text
 
 def register_entity(user_id, e_type, username=None):
@@ -93,7 +96,8 @@ def register_entity(user_id, e_type, username=None):
         conn.commit()
         cur.close()
         conn.close()
-    except: pass
+    except Exception as e:
+        logging.error(f"Register Error: {e}")
 
 async def fetch_news_loop():
     while True:
@@ -110,7 +114,8 @@ async def fetch_news_loop():
                         admin_msg = f"📩 **አዲስ ዜና ለፍቃድ ቀርቧል!**\n\n📝 ርዕስ: {entry.title}\n🔗 ሊንክ: {entry.link}"
                         await bot.send_message(ADMIN_ID, admin_msg, reply_markup=builder.as_markup())
                         sent_news.add(entry.link)
-            except: pass
+            except Exception as e:
+                logging.error(f"Feed Fetch Error: {e}")
         await asyncio.sleep(20)
 
 # --- Handlers ---
@@ -128,8 +133,8 @@ async def approve_news(callback: types.CallbackQuery):
         paragraphs = soup.find_all('p')
         full_text_en = "\n\n".join([p.get_text() for p in paragraphs if len(p.get_text()) > 60])
 
-        am_title = await translate_text(news_title, 'am')
-        am_body = await translate_text(full_text_en[:3000], 'am')
+        am_title = await ai_translate(news_title, "Amharic")
+        am_body = await ai_translate(full_text_en[:2000], "Amharic")
 
         broadcast_msg = f"📢 **BREAKING NEWS**\n\n🇪🇹 **ርዕስ፦ {am_title}**\n\n📝 **ዝርዝር ዘገባ፦**\n{am_body}\n\n🔗 {news_link}"
         
@@ -144,9 +149,10 @@ async def approve_news(callback: types.CallbackQuery):
         for target in targets:
             try:
                 await bot.send_message(target[0], broadcast_msg)
-                await asyncio.sleep(0.05) # Rate limiting
+                await asyncio.sleep(0.05)
                 count += 1
-            except: pass
+            except Exception as e:
+                logging.error(f"Send Error: {e}")
         await callback.message.edit_text(f"✅ ለ {count} አድራሻዎች ተሰራጭቷል!")
     except Exception as e:
         await callback.answer(f"Error: {e}", show_alert=True)
@@ -190,7 +196,7 @@ async def get_user_detail(message: types.Message):
         if user:
             await message.answer(f"👤 **ዝርዝር መረጃ**\n\n🆔 Telegram ID: `{user[0]}`\n📂 አይነት: {user[1]}\n🏷 ስም: @{user[2]}")
 
-# --- 💬 የAI ቻት (በተጠቃሚው ቋንቋ ብቻ የሚመልስ) ---
+# --- 💬 የAI ቻት ---
 @dp.message()
 async def chat_and_reg(message: types.Message):
     e_type = "private" if message.chat.type == "private" else "group"
@@ -202,21 +208,18 @@ async def chat_and_reg(message: types.Message):
         try:
             if ai_model:
                 prompt = (
-                    "You are a helpful and intelligent AI assistant. "
-                    "Detect the language of the user's message and reply in the EXACT same language. "
-                    "If they write in Amharic, respond ONLY in Amharic. "
-                    "If they write in English, respond ONLY in English. "
-                    "If they write in any other language, respond in that exact language. "
-                    "Do not translate back and forth or include multiple languages in the response.\n\n"
+                    "You are a smart, helpful AI assistant. "
+                    "Analyze the user's input and reply logically with fresh information. "
+                    "Do NOT just repeat, mirror, or echo what the user said. "
+                    "Respond in the EXACT same language as the user's message. "
+                    "If they write in Amharic, reply in natural Amharic. "
+                    "If they write in English, reply in English.\n\n"
                     f"User message: {message.text}"
                 )
                 response = await asyncio.to_thread(ai_model.generate_content, prompt)
                 await message.reply(response.text.strip())
             else:
-                detected = await asyncio.to_thread(translator.detect, message.text)
-                target_lang = detected.lang if detected.lang in ['am', 'en'] else 'am'
-                translated_text = await translate_text(message.text, target=target_lang)
-                await message.reply(translated_text)
+                await message.reply("ይቅርታ፣ የAI አገልግሎቱ አልተገናኘም። እባክዎ Render Environment Variables ላይ GEMINI_API_KEY ያስገቡ።")
                 
         except Exception as e:
             logging.error(f"AI Response Error: {e}")
