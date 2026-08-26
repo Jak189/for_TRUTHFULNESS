@@ -1,7 +1,0 @@
-aiogram
-requests
-beautifulsoup4
-googletrans==4.0.0-rc1
-flask
-feedparser
-psycopg2-binary
