@@ -18,7 +18,7 @@ app = Flask('')
 # --- Gemini AI Setup ---
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
-    ai_model = genai.GenerativeModel('gemini-1.5-flash')
+    ai_model = genai.GenerativeModel('gemini-2.5-flash')
 else:
     ai_model = None
 
