@@ -30,12 +30,19 @@ def init_db():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
+        # የተጠቃሚዎች መረጃ
         cur.execute("""
             CREATE TABLE IF NOT EXISTS entities (
                 id SERIAL PRIMARY KEY,
                 user_id BIGINT UNIQUE, 
                 type TEXT, 
                 username TEXT
+            )
+        """)
+        # የተላኩ ዜናዎች መያዣ (እንዳይደገሙ)
+        cur.execute("""
+            CREATE TABLE IF NOT EXISTS sent_news_db (
+                link TEXT PRIMARY KEY
             )
         """)
         conn.commit()
@@ -46,39 +53,48 @@ def init_db():
 
 init_db()
 
-# --- የዜና ምንጮች ---
+# --- የሳይበርና ሃኪንግ ዜናዎች ብቻ (Cybersecurity & Hacking Feeds) ---
 NEWS_FEEDS = [
-    # የሀገር ውስጥ
-    "https://www.ethiopianreporter.com/feed/",
-    "https://waltainfo.com/feed/",
-    "https://www.fanabc.com/feed/",
-    "https://addisstandard.com/feed/",
-    "https://zehabesha.com/feed/",
-    "https://www.ena.et/am/feed/",
-    # አለም አቀፍ
-    "https://feeds.bbci.co.uk/news/world/rss.xml",
-    "https://www.aljazeera.com/xml/rss/all.xml",
-    "https://news.yahoo.com/rss/",
-    "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
-    "http://feeds.foxnews.com/foxnews/latest",
-    "https://www.reutersagency.com/feed/",
-    # ልዩ ፍለጋዎች
-    "https://news.google.com/rss/search?q=Tikvah+Ethiopia+OR+Abel+Berhanu&hl=am&gl=ET&ceid=ET:am",
-    "https://news.google.com/rss/search?q=AP+News+OR+Reuters+OR+NYTimes&hl=en&gl=US&ceid=US:en"
+    "https://feeds.feedburner.com/TheHackersNews",
+    "https://www.bleepingcomputer.com/feed/",
+    "https://cyberscoop.com/feed/",
+    "https://www.darkreading.com/rss.xml",
+    "https://news.google.com/rss/search?q=cybersecurity+OR+hacking+OR+malware&hl=en&gl=US&ceid=US:en"
 ]
 
-sent_news = set()
 bot = Bot(token=API_TOKEN)
 dp = Dispatcher()
 
 # --- Helpers ---
 
+def is_news_sent(link):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("SELECT link FROM sent_news_db WHERE link = %s", (link,))
+        row = cur.fetchone()
+        cur.close()
+        conn.close()
+        return row is not None
+    except:
+        return False
+
+def save_sent_news(link):
+    try:
+        conn = get_db_connection()
+        cur = conn.cursor()
+        cur.execute("INSERT INTO sent_news_db (link) VALUES (%s) ON CONFLICT DO NOTHING", (link,))
+        conn.commit()
+        cur.close()
+        conn.close()
+    except Exception as e:
+        logging.error(f"Save News Error: {e}")
+
 async def ai_translate(text, target_lang="Amharic"):
-    """Gemini ን በመጠቀም ዜናዎችን ወደ አማርኛ መተርጎም"""
     if not ai_model or not text.strip():
         return text
     try:
-        prompt = f"Translate the following news text into clear, natural {target_lang}. Return ONLY the translation:\n\n{text}"
+        prompt = f"Translate this cybersecurity news into clear, natural {target_lang}. Return ONLY translation:\n\n{text}"
         res = await asyncio.to_thread(ai_model.generate_content, prompt)
         return res.text.strip()
     except Exception as e:
@@ -105,18 +121,18 @@ async def fetch_news_loop():
             try:
                 feed = feedparser.parse(url)
                 for entry in feed.entries[:2]:
-                    if entry.link not in sent_news:
+                    if not is_news_sent(entry.link):
                         builder = InlineKeyboardBuilder()
                         builder.row(
                             types.InlineKeyboardButton(text="✅ አጽድቅ (Approve)", callback_data="ok_send"),
                             types.InlineKeyboardButton(text="❌ ይቅር (Ignore)", callback_data="no_skip")
                         )
-                        admin_msg = f"📩 **አዲስ ዜና ለፍቃድ ቀርቧል!**\n\n📝 ርዕስ: {entry.title}\n🔗 ሊንክ: {entry.link}"
+                        admin_msg = f"📩 **አዲስ የሳይበር/ሃኪንግ ዜና ቀርቧል!**\n\n📝 ርዕስ: {entry.title}\n🔗 ሊንክ: {entry.link}"
                         await bot.send_message(ADMIN_ID, admin_msg, reply_markup=builder.as_markup())
-                        sent_news.add(entry.link)
+                        save_sent_news(entry.link)
             except Exception as e:
                 logging.error(f"Feed Fetch Error: {e}")
-        await asyncio.sleep(20)
+        await asyncio.sleep(60)
 
 # --- Handlers ---
 
@@ -127,7 +143,6 @@ async def approve_news(callback: types.CallbackQuery):
         news_link = msg_text.split("🔗 ሊንክ: ")[1].split("\n")[0].strip()
         news_title = msg_text.split("📝 ርዕስ: ")[1].split("\n")[0]
         
-        # Scraping
         res = requests.get(news_link, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
         soup = BeautifulSoup(res.text, 'html.parser')
         paragraphs = soup.find_all('p')
@@ -136,7 +151,7 @@ async def approve_news(callback: types.CallbackQuery):
         am_title = await ai_translate(news_title, "Amharic")
         am_body = await ai_translate(full_text_en[:2000], "Amharic")
 
-        broadcast_msg = f"📢 **BREAKING NEWS**\n\n🇪🇹 **ርዕስ፦ {am_title}**\n\n📝 **ዝርዝር ዘገባ፦**\n{am_body}\n\n🔗 {news_link}"
+        broadcast_msg = f"🛡 **CYBER & HACKING NEWS**\n\n🇪🇹 **ርዕስ፦ {am_title}**\n\n📝 **ዝርዝር ዘገባ፦**\n{am_body}\n\n🔗 {news_link}"
         
         conn = get_db_connection()
         cur = conn.cursor()
@@ -165,9 +180,8 @@ async def ignore_news(callback: types.CallbackQuery):
 async def cmd_start(message: types.Message):
     e_type = "private" if message.chat.type == "private" else "group"
     register_entity(message.chat.id, e_type, message.chat.username or message.chat.title)
-    await message.answer("እንኳን ወደ for_TRUTHFULNESS በሰላም መጡ! ⚖️")
+    await message.answer("ሰላም! እንኳን ወደ የሳይበር ደህንነት፣ ሃኪንግ እና AI ረዳት ቦት በሰላም መጡ። 🛡️🤖\n\nየምትፈልጉትን ማንኛውንም ጥያቄ መጠየቅ ትችላላችሁ!")
 
-# --- 📊 ስታቲስቲክስ ---
 @dp.message(Command("stat"))
 async def cmd_stat(message: types.Message):
     if message.from_user.id == ADMIN_ID:
@@ -181,22 +195,9 @@ async def cmd_stat(message: types.Message):
         report = "📊 **የተመዘገቡ አድራሻዎች፦**\n\n"
         for r in rows:
             report += f"{r[0]}. @{r[1] if r[1] else 'ያልታወቀ'}\n"
-        report += "\n💡 ዝርዝር ዳታ ለማየት የቁጥሩን ቁጥር Reply ያድርጉ።"
         await message.answer(report)
 
-@dp.message(F.reply_to_message & (F.from_user.id == ADMIN_ID))
-async def get_user_detail(message: types.Message):
-    if message.text.isdigit():
-        conn = get_db_connection()
-        cur = conn.cursor()
-        cur.execute("SELECT user_id, type, username FROM entities WHERE id = %s", (int(message.text),))
-        user = cur.fetchone()
-        cur.close()
-        conn.close()
-        if user:
-            await message.answer(f"👤 **ዝርዝር መረጃ**\n\n🆔 Telegram ID: `{user[0]}`\n📂 አይነት: {user[1]}\n🏷 ስም: @{user[2]}")
-
-# --- 💬 የAI ቻት ---
+# --- 💬 ሰው መሰል AI ቻት (Human-like AI Persona) ---
 @dp.message()
 async def chat_and_reg(message: types.Message):
     e_type = "private" if message.chat.type == "private" else "group"
@@ -207,27 +208,34 @@ async def chat_and_reg(message: types.Message):
         
         try:
             if ai_model:
-                prompt = (
-                    "You are a smart, helpful AI assistant. "
-                    "Analyze the user's input and reply logically with fresh information. "
-                    "Do NOT just repeat, mirror, or echo what the user said. "
-                    "Respond in the EXACT same language as the user's message. "
-                    "If they write in Amharic, reply in natural Amharic. "
-                    "If they write in English, reply in English.\n\n"
-                    f"User message: {message.text}"
-                )
+                # ቦቱ ልክ እንደ እውነተኛ ሰውና አስተዋይ AI እንዲያወራ የተሰጠ መመሪያ
+                prompt = f"""
+                You are a smart, empathetic, and highly capable AI assistant, functioning just like Gemini.
+                Your persona:
+                - Talk like a real, thoughtful human peer—warm, helpful, concise, and direct.
+                - Do NOT repeat, mirror, or echo the user's text back to them.
+                - Always reply strictly in the EXACT SAME LANGUAGE the user writes in.
+                - If the user writes in Amharic (or Amharic in Latin alphabet/Fidel), reply in natural, fluent Amharic.
+                - If the user writes in English, reply in English.
+                - Never output multiple languages or translations side by side.
+                
+                User input: {message.text}
+                """
                 response = await asyncio.to_thread(ai_model.generate_content, prompt)
-                await message.reply(response.text.strip())
+                if response and response.text:
+                    await message.reply(response.text.strip())
+                else:
+                    await message.reply("ይቅርታ፣ መልሱን ማዘጋጀት አልተቻለም።")
             else:
-                await message.reply("ይቅርታ፣ የAI አገልግሎቱ አልተገናኘም። እባክዎ Render Environment Variables ላይ GEMINI_API_KEY ያስገቡ።")
+                await message.reply("⚠️ GEMINI_API_KEY በ Render ላይ አልተዘጋጀም።")
                 
         except Exception as e:
-            logging.error(f"AI Response Error: {e}")
-            await message.reply("ይቅርታ፣ መልስ ለመስጠት አልተቻለም። እባክዎ ትንሽ ቆይተው እንደገና ይሞክሩ።")
+            logging.error(f"AI Error: {e}")
+            await message.reply("ይቅርታ፣ አሁን መልስ መስጠት አልተቻለም። እባክዎ ትንሽ ቆይተው ይሞክሩ።")
 
 # --- Server ---
 @app.route('/')
-def home(): return "Bot is Online!"
+def home(): return "Bot is Active!"
 
 def run_flask():
     app.run(host='0.0.0.0', port=int(os.environ.get('PORT', 8080)))
