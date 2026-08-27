@@ -91,19 +91,18 @@ def save_sent_news(link):
 async def ai_explain_news(title, raw_text):
     """ዜናው ሙሉ መረጃ ባይኖረውም AIው ራሱ አብራርቶ እንዲጽፍ ማድረጊያ"""
     if not ai_model:
-        return title, raw_text
+        return title, "የዜናውን ዝርዝር ማብራሪያ ማዘጋጀት አልተቻለም።"
     try:
         prompt = f"""
-        You are an expert news reporter. 
-        Read this title and snippet:
-        Title: {title}
-        Details: {raw_text[:1000]}
+        You are a professional cyber security news translator and summary generator.
+        Source Title: {title}
+        Source Snippet: {raw_text[:1200]}
 
-        Task:
-        1. Translate and write a clear Amharic title.
-        2. Write a short, clear, and comprehensive Amharic explanation (summary) of what this news is about, even if the source snippet is short.
+        Tasks:
+        1. Translate the news title into clear, compelling Amharic.
+        2. Write a detailed, highly informative Amharic explanation (at least 3-4 sentences) breaking down what this cyber threat/event is about, even if the snippet is short.
         
-        Format output exactly like this:
+        Strict Output Format (Do not deviate):
         TITLE: <Amharic Title>
         BODY: <Amharic Detailed Explanation>
         """
@@ -118,7 +117,7 @@ async def ai_explain_news(title, raw_text):
         return title, text
     except Exception as e:
         logging.error(f"News AI Error: {e}")
-        return title, raw_text
+        return title, "የዜናውን ዝርዝር ማብራሪያ በ AI ማዘጋጀት አልተቻለም።"
 
 def register_entity(user_id, e_type, username=None):
     try:
@@ -171,7 +170,6 @@ async def approve_news(callback: types.CallbackQuery):
         except:
             raw_text = news_title
 
-        # AIው ራሱ አብራርቶ ያዘጋጀዋል
         am_title, am_body = await ai_explain_news(news_title, raw_text)
 
         broadcast_msg = f"🛡 **CYBER & HACKING NEWS**\n\n🇪🇹 **ርዕስ፦ {am_title}**\n\n📝 **ዝርዝር ማብራሪያ፦**\n{am_body}\n\n🔗 {news_link}"
@@ -199,7 +197,7 @@ async def approve_news(callback: types.CallbackQuery):
 async def ignore_news(callback: types.CallbackQuery):
     await callback.message.edit_text("❌ ዜናው ታልፏል (ተሰርዟል)።")
 
-# --- 4. አዲስ አባል ሲቀላቀል እንኳን ደህና መጣችሁ ለማለት ---
+# --- አዲስ አባል ሲቀላቀል ---
 @dp.message(F.new_chat_members)
 async def welcome_new_members(message: types.Message):
     bot_info = await bot.get_me()
@@ -229,7 +227,7 @@ async def cmd_stat(message: types.Message):
             report += f"{r[0]}. @{r[1] if r[1] else 'ያልታወቀ'}\n"
         await message.answer(report)
 
-# --- 2 እና 3. የ AI ቻት እና በግሩፕ ውስጥ የመልስ ገደብ ---
+# --- የ AI ቻት ---
 @dp.message()
 async def chat_and_reg(message: types.Message):
     e_type = "private" if message.chat.type == "private" else "group"
@@ -239,14 +237,13 @@ async def chat_and_reg(message: types.Message):
     is_private = message.chat.type == "private"
     is_admin = message.from_user.id == ADMIN_ID
     
-    # ቦቱ Reply ከተደረገለት ማረጋገጫ
     is_replied_to_bot = (
         message.reply_to_message and 
         message.reply_to_message.from_user and 
         message.reply_to_message.from_user.id == bot_info.id
     )
 
-    # 3. በግሩፕ ውስጥ ከሆነ፦ ፕራይቬት ካልሆነ፣ Admin ካላዘዘው እና Reply ካልተደረገለት አይመልስም
+    # በግሩፕ ውስጥ Reply ካልተደረገ ወይም Admin ካላዘዘው ይተዋል
     if not is_private and not is_admin and not is_replied_to_bot:
         return
 
@@ -255,28 +252,25 @@ async def chat_and_reg(message: types.Message):
         
         try:
             if ai_model:
-                # 2. ለማንኛውም ጥያቄ ምላሽ እንዲሰጥ እና እንደ እውነተኛ ሰው እንዲያወራ የተሰጠ መመሪያ
                 prompt = f"""
-                You are a smart, empathetic, and helpful AI assistant.
-                - Answer ANY question the user asks accurately and naturally.
-                - Talk like a real human peer—warm, direct, and concise.
-                - Reply strictly in the EXACT SAME LANGUAGE the user writes in.
-                - If written in Amharic (or Amharic in Latin alphabet), reply in natural Amharic.
-                - Do NOT mirror or repeat the user's question back to them.
+                You are a smart, friendly, and helpful AI assistant.
+                - Reply logically, accurately, and naturally to the user's message like a human peer.
+                - Match the language of the prompt: If written in Amharic (or Latin Amharic), respond strictly in natural Amharic. If in English, respond in English.
+                - Do NOT repeat or echo the user's sentence.
 
-                User message: {message.text}
+                User input: {message.text}
                 """
                 response = await asyncio.to_thread(ai_model.generate_content, prompt)
                 if response and response.text:
                     await message.reply(response.text.strip())
                 else:
-                    await message.reply("ይቅርታ፣ ጥያቄውን ማዘጋጀት አልተቻለም።")
+                    await message.reply("ይቅርታ፣ አሁን መልሱን ማዘጋጀት አልተቻለም።")
             else:
-                await message.reply("⚠️ GEMINI_API_KEY በ Render ላይ አልተዘጋጀም።")
+                await message.reply("⚠️ GEMINI_API_KEY በ Render ላይ አልተዘጋጀም ወይም አልሰራም።")
                 
         except Exception as e:
             logging.error(f"AI Error: {e}")
-            await message.reply("ይቅርታ፣ አሁን መልስ መስጠት አልተቻለም። እባክዎ ትንሽ ቆይተው ይሞክሩ።")
+            await message.reply("ይቅርታ፣ አሁን መልስ መስጠት አልተቻለም። እባክዎ GEMINI_API_KEY በ Render ላይ በትክክል መገባቱን ያረጋግጡ።")
 
 # --- Server ---
 @app.route('/')
