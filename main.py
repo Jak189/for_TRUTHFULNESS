@@ -30,7 +30,6 @@ def init_db():
     try:
         conn = get_db_connection()
         cur = conn.cursor()
-        # የተጠቃሚዎች መረጃ
         cur.execute("""
             CREATE TABLE IF NOT EXISTS entities (
                 id SERIAL PRIMARY KEY,
@@ -39,7 +38,6 @@ def init_db():
                 username TEXT
             )
         """)
-        # የተላኩ ዜናዎች መያዣ (እንዳይደገሙ)
         cur.execute("""
             CREATE TABLE IF NOT EXISTS sent_news_db (
                 link TEXT PRIMARY KEY
@@ -53,7 +51,7 @@ def init_db():
 
 init_db()
 
-# --- የሳይበርና ሃኪንግ ዜናዎች ብቻ (Cybersecurity & Hacking Feeds) ---
+# --- የዜና ምንጮች ---
 NEWS_FEEDS = [
     "https://feeds.feedburner.com/TheHackersNews",
     "https://www.bleepingcomputer.com/feed/",
@@ -90,16 +88,37 @@ def save_sent_news(link):
     except Exception as e:
         logging.error(f"Save News Error: {e}")
 
-async def ai_translate(text, target_lang="Amharic"):
-    if not ai_model or not text.strip():
-        return text
+async def ai_explain_news(title, raw_text):
+    """ዜናው ሙሉ መረጃ ባይኖረውም AIው ራሱ አብራርቶ እንዲጽፍ ማድረጊያ"""
+    if not ai_model:
+        return title, raw_text
     try:
-        prompt = f"Translate this cybersecurity news into clear, natural {target_lang}. Return ONLY translation:\n\n{text}"
+        prompt = f"""
+        You are an expert news reporter. 
+        Read this title and snippet:
+        Title: {title}
+        Details: {raw_text[:1000]}
+
+        Task:
+        1. Translate and write a clear Amharic title.
+        2. Write a short, clear, and comprehensive Amharic explanation (summary) of what this news is about, even if the source snippet is short.
+        
+        Format output exactly like this:
+        TITLE: <Amharic Title>
+        BODY: <Amharic Detailed Explanation>
+        """
         res = await asyncio.to_thread(ai_model.generate_content, prompt)
-        return res.text.strip()
+        text = res.text.strip()
+        
+        if "TITLE:" in text and "BODY:" in text:
+            parts = text.split("BODY:")
+            am_title = parts[0].replace("TITLE:", "").strip()
+            am_body = parts[1].strip()
+            return am_title, am_body
+        return title, text
     except Exception as e:
-        logging.error(f"Translation Error: {e}")
-        return text
+        logging.error(f"News AI Error: {e}")
+        return title, raw_text
 
 def register_entity(user_id, e_type, username=None):
     try:
@@ -143,15 +162,19 @@ async def approve_news(callback: types.CallbackQuery):
         news_link = msg_text.split("🔗 ሊንክ: ")[1].split("\n")[0].strip()
         news_title = msg_text.split("📝 ርዕስ: ")[1].split("\n")[0]
         
-        res = requests.get(news_link, headers={'User-Agent': 'Mozilla/5.0'}, timeout=10)
-        soup = BeautifulSoup(res.text, 'html.parser')
-        paragraphs = soup.find_all('p')
-        full_text_en = "\n\n".join([p.get_text() for p in paragraphs if len(p.get_text()) > 60])
+        raw_text = ""
+        try:
+            res = requests.get(news_link, headers={'User-Agent': 'Mozilla/5.0'}, timeout=8)
+            soup = BeautifulSoup(res.text, 'html.parser')
+            paragraphs = soup.find_all('p')
+            raw_text = "\n\n".join([p.get_text() for p in paragraphs if len(p.get_text()) > 40])
+        except:
+            raw_text = news_title
 
-        am_title = await ai_translate(news_title, "Amharic")
-        am_body = await ai_translate(full_text_en[:2000], "Amharic")
+        # AIው ራሱ አብራርቶ ያዘጋጀዋል
+        am_title, am_body = await ai_explain_news(news_title, raw_text)
 
-        broadcast_msg = f"🛡 **CYBER & HACKING NEWS**\n\n🇪🇹 **ርዕስ፦ {am_title}**\n\n📝 **ዝርዝር ዘገባ፦**\n{am_body}\n\n🔗 {news_link}"
+        broadcast_msg = f"🛡 **CYBER & HACKING NEWS**\n\n🇪🇹 **ርዕስ፦ {am_title}**\n\n📝 **ዝርዝር ማብራሪያ፦**\n{am_body}\n\n🔗 {news_link}"
         
         conn = get_db_connection()
         cur = conn.cursor()
@@ -176,11 +199,20 @@ async def approve_news(callback: types.CallbackQuery):
 async def ignore_news(callback: types.CallbackQuery):
     await callback.message.edit_text("❌ ዜናው ታልፏል (ተሰርዟል)።")
 
+# --- 4. አዲስ አባል ሲቀላቀል እንኳን ደህና መጣችሁ ለማለት ---
+@dp.message(F.new_chat_members)
+async def welcome_new_members(message: types.Message):
+    bot_info = await bot.get_me()
+    for member in message.new_chat_members:
+        if member.id != bot_info.id:
+            user_name = member.first_name
+            await message.reply(f"ሰላም {user_name} 👋\nወደ ግሩፓችን እንኳን በደህና መጡ! 🌼")
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message):
     e_type = "private" if message.chat.type == "private" else "group"
     register_entity(message.chat.id, e_type, message.chat.username or message.chat.title)
-    await message.answer("ሰላም! እንኳን ወደ የሳይበር ደህንነት፣ ሃኪንግ እና AI ረዳት ቦት በሰላም መጡ። 🛡️🤖\n\nየምትፈልጉትን ማንኛውንም ጥያቄ መጠየቅ ትችላላችሁ!")
+    await message.answer("ሰላም! እንኳን ወደ AI ረዳት ቦት በሰላም መጡ። 🛡️🤖")
 
 @dp.message(Command("stat"))
 async def cmd_stat(message: types.Message):
@@ -197,35 +229,48 @@ async def cmd_stat(message: types.Message):
             report += f"{r[0]}. @{r[1] if r[1] else 'ያልታወቀ'}\n"
         await message.answer(report)
 
-# --- 💬 ሰው መሰል AI ቻት (Human-like AI Persona) ---
+# --- 2 እና 3. የ AI ቻት እና በግሩፕ ውስጥ የመልስ ገደብ ---
 @dp.message()
 async def chat_and_reg(message: types.Message):
     e_type = "private" if message.chat.type == "private" else "group"
     register_entity(message.chat.id, e_type, message.chat.username or message.chat.title)
     
+    bot_info = await bot.get_me()
+    is_private = message.chat.type == "private"
+    is_admin = message.from_user.id == ADMIN_ID
+    
+    # ቦቱ Reply ከተደረገለት ማረጋገጫ
+    is_replied_to_bot = (
+        message.reply_to_message and 
+        message.reply_to_message.from_user and 
+        message.reply_to_message.from_user.id == bot_info.id
+    )
+
+    # 3. በግሩፕ ውስጥ ከሆነ፦ ፕራይቬት ካልሆነ፣ Admin ካላዘዘው እና Reply ካልተደረገለት አይመልስም
+    if not is_private and not is_admin and not is_replied_to_bot:
+        return
+
     if not message.text.startswith('/'):
         await bot.send_chat_action(chat_id=message.chat.id, action="typing")
         
         try:
             if ai_model:
-                # ቦቱ ልክ እንደ እውነተኛ ሰውና አስተዋይ AI እንዲያወራ የተሰጠ መመሪያ
+                # 2. ለማንኛውም ጥያቄ ምላሽ እንዲሰጥ እና እንደ እውነተኛ ሰው እንዲያወራ የተሰጠ መመሪያ
                 prompt = f"""
-                You are a smart, empathetic, and highly capable AI assistant, functioning just like Gemini.
-                Your persona:
-                - Talk like a real, thoughtful human peer—warm, helpful, concise, and direct.
-                - Do NOT repeat, mirror, or echo the user's text back to them.
-                - Always reply strictly in the EXACT SAME LANGUAGE the user writes in.
-                - If the user writes in Amharic (or Amharic in Latin alphabet/Fidel), reply in natural, fluent Amharic.
-                - If the user writes in English, reply in English.
-                - Never output multiple languages or translations side by side.
-                
-                User input: {message.text}
+                You are a smart, empathetic, and helpful AI assistant.
+                - Answer ANY question the user asks accurately and naturally.
+                - Talk like a real human peer—warm, direct, and concise.
+                - Reply strictly in the EXACT SAME LANGUAGE the user writes in.
+                - If written in Amharic (or Amharic in Latin alphabet), reply in natural Amharic.
+                - Do NOT mirror or repeat the user's question back to them.
+
+                User message: {message.text}
                 """
                 response = await asyncio.to_thread(ai_model.generate_content, prompt)
                 if response and response.text:
                     await message.reply(response.text.strip())
                 else:
-                    await message.reply("ይቅርታ፣ መልሱን ማዘጋጀት አልተቻለም።")
+                    await message.reply("ይቅርታ፣ ጥያቄውን ማዘጋጀት አልተቻለም።")
             else:
                 await message.reply("⚠️ GEMINI_API_KEY በ Render ላይ አልተዘጋጀም።")
                 
