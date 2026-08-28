@@ -48,12 +48,13 @@ NEWS_FEEDS = [
     "https://zehabesha.com/feed/",
     "https://www.ena.et/am/feed/",
     # አለም አቀፍ
-    "https://feeds.bbci.co.uk/news/world/rss.xml",
-    "https://www.aljazeera.com/xml/rss/all.xml",
-    "https://news.yahoo.com/rss/",
-    "https://rss.nytimes.com/services/xml/rss/nyt/World.xml",
     "http://feeds.foxnews.com/foxnews/latest",
     "https://www.reutersagency.com/feed/",
+    "https://feeds.feedburner.com/TheHackersNews",
+    "https://www.bleepingcomputer.com/feed/",
+    "https://cyberscoop.com/feed/",
+    "https://www.darkreading.com/rss.xml",
+    "https://news.google.com/rss/search?q=cybersecurity+OR+hacking+OR+malware&hl=en&gl=US&ceid=US:en",
     # ልዩ ፍለጋዎች (ለ Tikvah እና Abel Berhanu)
     "https://news.google.com/rss/search?q=Tikvah+Ethiopia+OR+Abel+Berhanu&hl=am&gl=ET&ceid=ET:am",
     "https://news.google.com/rss/search?q=AP+News+OR+Reuters+OR+NYTimes&hl=en&gl=US&ceid=US:en"
