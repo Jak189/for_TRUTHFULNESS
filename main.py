@@ -1,4 +1,3 @@
-PK:
 import logging, os, asyncio, requests, feedparser, psycopg2
 from bs4 import BeautifulSoup
 from googletrans import Translator
